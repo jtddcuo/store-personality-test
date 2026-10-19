@@ -1,0 +1,359 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import {
+  DIMENSIONS,
+  balancedProfile,
+  dimensionMeta,
+  getDominantDimensions,
+  type AssessmentOutcome,
+  type Dimension,
+} from "@/lib/assessment";
+import { RadarChart } from "@/components/radar-chart";
+import { defaultSiteContent, resolveProfile, type SiteContent } from "@/lib/site-content";
+import { resultUrl, pageUrl } from "@/lib/client";
+
+export type SavedResult = AssessmentOutcome & {
+  resultId: string;
+  createdAt: string;
+};
+
+type ResultViewProps = {
+  result: SavedResult;
+  shareUrl?: string;
+  content?: SiteContent;
+};
+
+function roundRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) {
+  context.beginPath();
+  context.roundRect(x, y, width, height, radius);
+  context.fill();
+}
+
+function wrapText(
+  context: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  maxWidth: number,
+  lineHeight: number,
+) {
+  const chars = Array.from(text);
+  let line = "";
+  let cursorY = y;
+  for (const char of chars) {
+    const candidate = line + char;
+    if (context.measureText(candidate).width > maxWidth && line) {
+      context.fillText(line, x, cursorY);
+      line = char;
+      cursorY += lineHeight;
+    } else {
+      line = candidate;
+    }
+  }
+  if (line) context.fillText(line, x, cursorY);
+  return cursorY + lineHeight;
+}
+
+function drawRadar(
+  context: CanvasRenderingContext2D,
+  scores: Record<Dimension, number>,
+  centerX: number,
+  centerY: number,
+  radius: number,
+  color: string,
+) {
+  const pointFor = (index: number, value: number) => {
+    const angle = -Math.PI / 2 + (Math.PI * 2 * index) / DIMENSIONS.length;
+    const r = radius * (value / 100);
+    return [centerX + Math.cos(angle) * r, centerY + Math.sin(angle) * r] as const;
+  };
+
+  context.lineWidth = 2;
+  [20, 40, 60, 80, 100].forEach((level) => {
+    context.beginPath();
+    DIMENSIONS.forEach((_, index) => {
+      const [x, y] = pointFor(index, level);
+      if (index === 0) context.moveTo(x, y);
+      else context.lineTo(x, y);
+    });
+    context.closePath();
+    context.strokeStyle = "rgba(37, 39, 48, .12)";
+    context.stroke();
+  });
+
+  context.beginPath();
+  DIMENSIONS.forEach((dimension, index) => {
+    const [x, y] = pointFor(index, scores[dimension]);
+    if (index === 0) context.moveTo(x, y);
+    else context.lineTo(x, y);
+  });
+  context.closePath();
+  context.fillStyle = `${color}38`;
+  context.fill();
+  context.strokeStyle = color;
+  context.lineWidth = 5;
+  context.stroke();
+
+  context.font = "26px -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif";
+  context.textAlign = "center";
+  DIMENSIONS.forEach((dimension, index) => {
+    const [x, y] = pointFor(index, 122);
+    context.fillStyle = "#5b5b63";
+    context.fillText(`${dimensionMeta[dimension].short} ${scores[dimension]}`, x, y + 8);
+  });
+  context.textAlign = "left";
+}
+
+export function ResultView({ result, shareUrl, content = defaultSiteContent }: ResultViewProps) {
+  const [modalOpen, setModalOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const profile = useMemo(() => resolveProfile(result.primaryId, content), [result.primaryId, content]);
+  const secondary = useMemo(() => resolveProfile(result.secondaryId, content), [result.secondaryId, content]);
+  const isBalanced = profile.id === balancedProfile.id;
+  const secondaryName = isBalanced ? "暂无明显副店型" : secondary.name;
+  const dominant = useMemo(() => getDominantDimensions(result.scores), [result.scores]);
+  const resolvedShareUrl = shareUrl ?? resultUrl(result.resultId);
+
+  const showNotice = (message: string) => {
+    setNotice(message);
+    window.setTimeout(() => setNotice(""), 2600);
+  };
+
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(resolvedShareUrl);
+      showNotice("结果链接已复制");
+    } catch {
+      const textarea = document.createElement("textarea");
+      textarea.value = resolvedShareUrl;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      textarea.remove();
+      showNotice("结果链接已复制");
+    }
+  };
+
+  const saveLongImage = async () => {
+    setBusy(true);
+    try {
+      if (document.fonts?.ready) await document.fonts.ready;
+      const canvas = document.createElement("canvas");
+      canvas.width = 1080;
+      canvas.height = Math.max(3600, 3400 + Math.ceil(profile.analysis.join("").length / 24) * 49);
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("Canvas unavailable");
+
+      const gradient = context.createLinearGradient(0, 0, 1080, canvas.height);
+      gradient.addColorStop(0, profile.palette[2]);
+      gradient.addColorStop(0.48, "#fffaf2");
+      gradient.addColorStop(1, "#f1e5d7");
+      context.fillStyle = gradient;
+      context.fillRect(0, 0, 1080, canvas.height);
+
+      context.fillStyle = "rgba(255,255,255,.72)";
+      roundRect(context, 64, 70, 952, 540, 42);
+      context.fillStyle = profile.palette[0];
+      context.font = "700 30px -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif";
+      context.letterSpacing = "3px";
+      context.fillText("你的店铺人格", 112, 140);
+      context.font = "140px -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif";
+      context.fillText(profile.emoji, 112, 300);
+      let nameSize = 82;
+      do {
+        context.font = `800 ${nameSize}px -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif`;
+        if (context.measureText(profile.name).width <= 850) break;
+        nameSize -= 2;
+      } while (nameSize > 36);
+      context.fillText(profile.name, 112, 405);
+      context.font = "32px -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif";
+      context.fillStyle = "#6c625b";
+      wrapText(context, profile.kicker, 116, 464, 850, 40);
+      context.font = "600 30px -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif";
+      context.fillStyle = profile.palette[0];
+      wrapText(context, profile.tags.join(" · "), 116, 535, 850, 40);
+
+      context.fillStyle = profile.palette[0];
+      context.font = "700 42px -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif";
+      let y = wrapText(context, `“${profile.quote}”`, 100, 700, 880, 62);
+
+      context.fillStyle = "rgba(255,255,255,.78)";
+      roundRect(context, 64, y + 18, 952, 600, 42);
+      drawRadar(context, result.scores, 540, y + 320, 188, profile.palette[1]);
+      y += 680;
+
+      context.fillStyle = profile.palette[0];
+      context.font = "800 42px -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif";
+      context.fillText("为什么你像这家店", 96, y);
+      y += 65;
+      context.fillStyle = "#4c4845";
+      context.font = "30px -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif";
+      for (const paragraph of profile.analysis) {
+        y = wrapText(context, paragraph, 96, y, 888, 49) + 26;
+      }
+
+      context.fillStyle = "rgba(255,255,255,.82)";
+      roundRect(context, 64, y + 5, 952, 540, 42);
+      const rows = [
+        ["招牌能力", profile.strength],
+        ["容易被误解", profile.misunderstood],
+        ["隐藏课题", profile.lesson],
+        ["你的副店型", secondaryName],
+      ];
+      let rowY = y + 82;
+      for (const [label, value] of rows) {
+        context.fillStyle = profile.palette[1];
+        context.font = "700 26px -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif";
+        context.fillText(label, 112, rowY);
+        context.fillStyle = "#2f3036";
+        context.font = "600 31px -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif";
+        wrapText(context, value, 320, rowY, 650, 42);
+        rowY += 105;
+      }
+      y += 630;
+
+      context.fillStyle = profile.palette[0];
+      const ruleHeight = Math.max(250, 180 + Math.ceil(profile.rule.length / 20) * 55);
+      roundRect(context, 64, y, 952, ruleHeight, 42);
+      context.fillStyle = "rgba(255,255,255,.68)";
+      context.font = "700 25px -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif";
+      context.fillText("今日店规", 112, y + 68);
+      context.fillStyle = "#fffaf2";
+      context.font = "700 38px -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif";
+      wrapText(context, profile.rule, 112, y + 135, 820, 55);
+
+      context.fillStyle = "#746d68";
+      context.font = "25px -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif";
+      const footerY = y + ruleHeight + 80;
+      context.fillText("如果你是一家店，会是什么店？ · 36题店铺人格测评", 86, footerY);
+
+      // The analysis length varies by profile. Crop after layout rather than
+      // clipping longer reports to a fixed 2820px image.
+      const output = document.createElement("canvas");
+      output.width = canvas.width;
+      output.height = footerY + 80;
+      const outputContext = output.getContext("2d");
+      if (!outputContext) throw new Error("Canvas unavailable");
+      outputContext.drawImage(canvas, 0, 0);
+      const blob = await new Promise<Blob | null>((resolve) => output.toBlob(resolve, "image/png", 0.96));
+      if (!blob) throw new Error("Image generation failed");
+      const file = new File([blob], `${profile.name}-店铺人格测试.png`, { type: "image/png" });
+      const nav = navigator as Navigator & { canShare?: (data?: ShareData) => boolean };
+      if (nav.share && nav.canShare?.({ files: [file] })) {
+        await nav.share({ files: [file], title: `我的店铺人格：${profile.name}`, text: profile.quote });
+        showNotice("长图已生成，可在系统菜单中保存");
+      } else {
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = file.name;
+        anchor.click();
+        window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+        showNotice("结果长图已下载");
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      console.error(error);
+      showNotice("生成长图失败，请稍后再试");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="result-page" style={{ "--profile": profile.palette[0], "--profile-soft": profile.palette[2] } as React.CSSProperties}>
+      <div className="result-shell">
+        <section className="result-card" id="result-card">
+          <div className="result-hero">
+            <div>
+              <p className="eyebrow">你的店铺人格</p>
+              <div className="result-symbol" aria-hidden="true">{profile.emoji}</div>
+              <h1>{profile.name}</h1>
+              <p className="result-kicker">{profile.kicker}</p>
+            </div>
+            <div className="tag-list">
+              {profile.tags.map((tag) => <span key={tag}>{tag}</span>)}
+            </div>
+          </div>
+
+          <blockquote>{profile.quote}</blockquote>
+
+          <section className="result-section profile-grid">
+            <div className="radar-wrap">
+              <RadarChart scores={result.scores} color={profile.palette[1]} />
+            </div>
+            <div className="profile-notes">
+              <p className="eyebrow">你的六维轮廓</p>
+              <h2>{isBalanced ? "目前更接近平衡区间" : "你最鲜明的两种气质"}</h2>
+              {dominant.map(({ dimension, score }) => (
+                <div className="dominant-row" key={dimension}>
+                  <div>
+                    <strong>{dimensionMeta[dimension].name}</strong>
+                    <span>{Math.abs(score - 50) <= 8 ? "两端偏好接近" : score > 50 ? dimensionMeta[dimension].high : dimensionMeta[dimension].low}</span>
+                  </div>
+                  <b>{score}</b>
+                </div>
+              ))}
+              <p className="method-note">{isBalanced ? "本次六项分数整体接近中间，暂不强行区分主副店型。分数反映这次的自我描述，并非能力高低。" : "人格更像连续的调音台，而不是非黑即白的格子。店铺类型根据六项偏好的方向组合匹配；分数并非人群百分位或能力等级。"}</p>
+            </div>
+          </section>
+
+          <section className="result-section reading-section">
+            <p className="eyebrow">为什么你像这家店</p>
+            <h2>你为世界提供的，是这种氛围</h2>
+            {profile.analysis.map((paragraph) => <p key={paragraph}>{paragraph}</p>)}
+          </section>
+
+          <section className="result-section insight-grid">
+            <article><span>招牌能力</span><strong>{profile.strength}</strong></article>
+            <article><span>容易被误解</span><strong>{profile.misunderstood}</strong></article>
+            <article><span>隐藏课题</span><strong>{profile.lesson}</strong></article>
+            <article><span>你的副店型</span><strong>{secondaryName}</strong></article>
+          </section>
+
+          <section className="today-rule">
+            <span>今日店规</span>
+            <strong>{profile.rule}</strong>
+          </section>
+
+          <p className="result-footnote">本测评基于人格特质、心理需要与环境偏好设计，用于趣味自我探索，不构成心理诊断。</p>
+        </section>
+
+        <section className="result-actions" aria-label="结果操作">
+          <button className="primary-button" onClick={saveLongImage} disabled={busy}>
+            {busy ? "正在生成长图…" : "保存结果长图"}
+          </button>
+          <button className="secondary-button" onClick={copyLink}>复制结果链接</button>
+          <div className="action-row">
+            <button className="ghost-button" onClick={() => { sessionStorage.removeItem("store-supabase-draft-v1"); window.location.href = pageUrl("/?retest=1"); window.location.reload(); }}>再测一次</button>
+            <button className="gift-button" onClick={() => setModalOpen(true)}>{content.giftButtonLabel}</button>
+          </div>
+        </section>
+      </div>
+
+      {notice && <div className="toast" role="status">{notice}</div>}
+
+      {modalOpen && (
+        <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setModalOpen(false); }}>
+          <section className="gift-modal" role="dialog" aria-modal="true" aria-labelledby="gift-title">
+            <button className="modal-close" aria-label="关闭" onClick={() => setModalOpen(false)}>×</button>
+            <div className="gift-icon">¥1</div>
+            <p className="eyebrow">好评有礼</p>
+            <h2 id="gift-title">{content.giftTitle}</h2>
+            <p>{content.giftMessage}</p>
+            <button className="primary-button" onClick={() => setModalOpen(false)}>我知道了</button>
+          </section>
+        </div>
+      )}
+    </main>
+  );
+}
