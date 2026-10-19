@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   DIMENSIONS,
   balancedProfile,
@@ -116,6 +116,8 @@ export function ResultView({ result, shareUrl, content = defaultSiteContent }: R
   const [modalOpen, setModalOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [exportImage, setExportImage] = useState<{ url: string; file: File } | null>(null);
+  useEffect(() => () => { if (exportImage) URL.revokeObjectURL(exportImage.url); }, [exportImage]);
   const profile = useMemo(() => resolveProfile(result.primaryId, content), [result.primaryId, content]);
   const secondary = useMemo(() => resolveProfile(result.secondaryId, content), [result.secondaryId, content]);
   const isBalanced = profile.id === balancedProfile.id;
@@ -247,19 +249,7 @@ export function ResultView({ result, shareUrl, content = defaultSiteContent }: R
       const blob = await new Promise<Blob | null>((resolve) => output.toBlob(resolve, "image/png", 0.96));
       if (!blob) throw new Error("Image generation failed");
       const file = new File([blob], `${profile.name}-店铺人格测试.png`, { type: "image/png" });
-      const nav = navigator as Navigator & { canShare?: (data?: ShareData) => boolean };
-      if (nav.share && nav.canShare?.({ files: [file] })) {
-        await nav.share({ files: [file], title: `我的店铺人格：${profile.name}`, text: profile.quote });
-        showNotice("长图已生成，可在系统菜单中保存");
-      } else {
-        const url = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = url;
-        anchor.download = file.name;
-        anchor.click();
-        window.setTimeout(() => URL.revokeObjectURL(url), 2000);
-        showNotice("结果长图已下载");
-      }
+      setExportImage({ url: URL.createObjectURL(blob), file });
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       console.error(error);
@@ -342,6 +332,22 @@ export function ResultView({ result, shareUrl, content = defaultSiteContent }: R
 
       {notice && <div className="toast" role="status">{notice}</div>}
 
+      {exportImage && <div className="modal-backdrop" role="presentation" onMouseDown={event => { if(event.target===event.currentTarget) setExportImage(null); }}>
+        <section className="gift-modal export-modal" role="dialog" aria-modal="true" aria-labelledby="export-title">
+          <button className="modal-close" aria-label="关闭长图预览" onClick={() => setExportImage(null)}>×</button>
+          <h2 id="export-title">你的店铺长图已生成</h2>
+          <p>电脑可下载 PNG；苹果手机可长按下方图片保存，或打开系统分享菜单选择“存储图像”。浏览器不能直接替你写入手机相册。</p>
+          <div className="export-image-scroll"><img src={exportImage.url} alt={`${profile.name}的完整测评结果长图`} /></div>
+          <a className="primary-button" href={exportImage.url} download={exportImage.file.name}>下载 PNG 长图</a>
+          <button className="secondary-button" onClick={async () => {
+            try {
+              if(navigator.share && navigator.canShare?.({files:[exportImage.file]})) await navigator.share({files:[exportImage.file],title:`我的店铺人格：${profile.name}`});
+              else showNotice("当前浏览器不支持系统分享，请下载或长按图片保存");
+            } catch(error) { if(!(error instanceof DOMException && error.name==="AbortError")) showNotice("请下载或长按图片保存"); }
+          }}>打开系统分享</button>
+        </section>
+      </div>}
+
       {modalOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setModalOpen(false); }}>
           <section className="gift-modal" role="dialog" aria-modal="true" aria-labelledby="gift-title">
@@ -350,6 +356,7 @@ export function ResultView({ result, shareUrl, content = defaultSiteContent }: R
             <p className="eyebrow">好评有礼</p>
             <h2 id="gift-title">{content.giftTitle}</h2>
             <p>{content.giftMessage}</p>
+            <small className="demo-note">当前为非商业演示，奖励提示仅展示功能，不提供真实购买或返现活动。</small>
             <button className="primary-button" onClick={() => setModalOpen(false)}>我知道了</button>
           </section>
         </div>
