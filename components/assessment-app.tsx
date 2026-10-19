@@ -253,7 +253,7 @@ export function AssessmentApp({ content = defaultSiteContent }: { content?: Site
                 id="test-code"
                 value={password}
                 onChange={(event) => { setPassword(event.target.value); setGateError(""); }}
-                placeholder="请输入购买后获得的密码"
+                placeholder="请输入体验密码"
                 autoComplete="one-time-code"
                 autoCapitalize="characters"
               />
@@ -288,7 +288,7 @@ export function AssessmentApp({ content = defaultSiteContent }: { content?: Site
         <article><span>03</span><strong>完整报告</strong><p>获得主店型、副店型、优势、误解与今日店规。</p></article>
       </section>
 
-      <footer className="landing-footer">趣味自我探索测评 · 不构成心理诊断</footer>
+      <footer className="landing-footer">非商业趣味测评演示 · 不提供在线购买或收款 · 不构成心理诊断</footer>
     </main>
   );
 }
